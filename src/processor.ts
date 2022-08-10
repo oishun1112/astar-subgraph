@@ -1,3 +1,4 @@
+// src/processor.ts
 import { lookupArchive } from "@subsquid/archive-registry";
 import { Store, TypeormDatabase } from "@subsquid/typeorm-store";
 import {
@@ -6,149 +7,88 @@ import {
   EvmLogEvent,
   SubstrateBatchProcessor,
   SubstrateBlock,
+  toHex,
 } from "@subsquid/substrate-processor";
 import { In } from "typeorm";
-import { ethers } from "ethers";
-import { CHAIN_NODE, contractAddress, getContractEntity } from "./contract";
-import { Owner, Token, Transfer } from "./model";
-import * as erc721 from "./abi/erc721";
+import { CHAIN_NODE, contract, factoryAddress, POOL_TEMPLATE_ADDRESS } from "./contract";
+import { Market } from "./model";
+import * as factory from "./abi/factory";
+
+const FACTORY_EVENTS = {
+  marketCreated: factory.events["MarketCreated(address,address,string,uint256[],address[])"],
+};
+
+const encoder = new TextEncoder();
 
 const database = new TypeormDatabase();
 const processor = new SubstrateBatchProcessor()
   .setBatchSize(500)
+  .setBlockRange({ from: 963605 })
   .setDataSource({
     chain: CHAIN_NODE,
-    archive: lookupArchive("moonriver", { release: "FireSquid" }),
+    archive: lookupArchive("astar", { release: "FireSquid" }),
   })
-  .setTypesBundle("moonbeam")
-  .addEvmLog(contractAddress, {
-    filter: [erc721.events["Transfer(address,address,uint256)"].topic],
+  .setTypesBundle("astar")
+  .addEvmLog(factoryAddress, {
+    filter: [Object.values(FACTORY_EVENTS).map((event) => event.topic)],
   });
 
 type Item = BatchProcessorItem<typeof processor>;
 type Context = BatchContext<Store, Item>;
 
+type EvmLogEventWithTimestamp = EvmLogEvent & { timestamp: number };
+
 processor.run(database, async (ctx) => {
-  const transfersData: TransferData[] = [];
+  const factoryEvent: EvmLogEventWithTimestamp[] = [];
 
   for (const block of ctx.blocks) {
     for (const item of block.items) {
       if (item.name === "EVM.Log") {
-        const transfer = handleTransfer(ctx, block.header, item.event);
-        transfersData.push(transfer);
+        const topic = item.event.args.topics[0];
+
+        if (
+          Object.values(FACTORY_EVENTS)
+            .map((event) => event.topic)
+            .includes(topic)
+        ) {
+          factoryEvent.push({ ...item.event, timestamp: block.header.timestamp });
+        }
       }
     }
   }
 
-  await saveTransfers(ctx, transfersData);
+  await saveEntities(ctx, factoryEvent);
 });
 
-type TransferData = {
-  id: string;
-  from: string;
-  to: string;
-  token: ethers.BigNumber;
-  timestamp: bigint;
-  block: number;
-  transactionHash: string;
+const getMarketCreated = (topic: string) => {
+  return [FACTORY_EVENTS.marketCreated].find((marketCreatedTopics) => marketCreatedTopics.topic === topic);
 };
 
-function handleTransfer(
-  ctx: Context,
-  block: SubstrateBlock,
-  event: EvmLogEvent
-): TransferData {
-  const { from, to, tokenId } = erc721.events[
-    "Transfer(address,address,uint256)"
-  ].decode(event.args);
-
-  const transfer: TransferData = {
-    id: event.id,
-    token: tokenId,
-    from,
-    to,
-    timestamp: BigInt(block.timestamp),
-    block: block.height,
-    transactionHash: event.evmTxHash,
-  };
-
-  return transfer;
-}
-
-async function saveTransfers(ctx: Context, transfersData: TransferData[]) {
-  const tokensIds: Set<string> = new Set();
-  const ownersIds: Set<string> = new Set();
-
-  for (const transferData of transfersData) {
-    tokensIds.add(transferData.token.toString());
-    ownersIds.add(transferData.from);
-    ownersIds.add(transferData.to);
+const saveEntities = async (ctx: Context, factoryEvents: EvmLogEventWithTimestamp[]) => {
+  for (const factoryEvent of factoryEvents) {
+    await handleNewMarket(ctx, factoryEvent);
   }
+};
 
-  const transfers: Set<Transfer> = new Set();
+const handleNewMarket = async (ctx: Context, event: EvmLogEventWithTimestamp) => {
+  const topic = event.args.topics[0];
+  const marketCreatedEventMatch = getMarketCreated(topic);
+  const pools: Market[] = [];
 
-  const tokens: Map<string, Token> = new Map(
-    (await ctx.store.findBy(Token, { id: In([...tokensIds]) })).map((token) => [
-      token.id,
-      token,
-    ])
-  );
+  if (marketCreatedEventMatch) {
+    const marketCreatedEvent = marketCreatedEventMatch.decode(event.args);
+    const { market, template, conditions, references } = marketCreatedEvent;
 
-  const owners: Map<string, Owner> = new Map(
-    (await ctx.store.findBy(Owner, { id: In([...ownersIds]) })).map((owner) => [
-      owner.id,
-      owner,
-    ])
-  );
-
-  for (const transferData of transfersData) {
-    const contract = new erc721.Contract(
-      ctx,
-      { height: transferData.block },
-      contractAddress
-    );
-
-    let from = owners.get(transferData.from);
-    if (from == null) {
-      from = new Owner({ id: transferData.from, balance: 0n });
-      owners.set(from.id, from);
-    }
-
-    let to = owners.get(transferData.to);
-    if (to == null) {
-      to = new Owner({ id: transferData.to, balance: 0n });
-      owners.set(to.id, to);
-    }
-
-    const tokenId = transferData.token.toString();
-
-    let token = tokens.get(tokenId);
-    if (token == null) {
-      token = new Token({
-        id: tokenId,
-        uri: await contract.tokenURI(transferData.token),
-        contract: await getContractEntity(ctx.store),
+    if (template.toLowerCase() === POOL_TEMPLATE_ADDRESS.toLowerCase()) {
+      const pool = new Market({
+        id: market,
+        template: encoder.encode(template),
+        created: BigInt(event.timestamp),
       });
-      tokens.set(token.id, token);
+
+      pools.push(pool);
     }
-    token.owner = to;
-
-    const { id, block, transactionHash, timestamp } = transferData;
-
-    const transfer = new Transfer({
-      id,
-      block,
-      timestamp,
-      transactionHash,
-      from,
-      to,
-      token,
-    });
-
-    transfers.add(transfer);
   }
 
-  await ctx.store.save([...owners.values()]);
-  await ctx.store.save([...tokens.values()]);
-  await ctx.store.save([...transfers]);
-}
+  await ctx.store.save(pools);
+};

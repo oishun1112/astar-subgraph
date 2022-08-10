@@ -1,28 +1,18 @@
+// src/contract.ts
 import { Store } from "@subsquid/typeorm-store";
-import { Contract } from "./model";
+import { ethers } from "ethers";
+import * as factory from "./abi/factory";
 
-export const CHAIN_NODE = "wss://wss.api.moonriver.moonbeam.network";
+export const CHAIN_NODE = "wss://astar.public.blastapi.io";
 
-export const contractAddress = "0xb654611f84a8dc429ba3cb4fda9fad236c505a1a";
+export const factoryAddress = "0x7Fcd5370be47cEC0FC0a7Fe91230432dd34DdeA1".toLowerCase();
+export const POOL_TEMPLATE_ADDRESS = "0x0074976043140a371aeaD31189C2BE459950c816".toLowerCase();
+export const INDEX_TEMPLATE_ADDRESS = "0x734afd33dFB5100Ee91EFE690526DfFdEdBE0cF4".toLowerCase();
+export const CDS_TEMPLATE_ADDRESS = "0xf4dB9926aE02469D730A25AD7422764BBD45d36F".toLowerCase();
+export const REGISTRY_ADDRESS = "0xd0Df5A352D74A746754C592a6277c9060A7c9c87".toLowerCase();
 
-export function createContractEntity(): Contract {
-  return new Contract({
-    id: contractAddress,
-    name: "Moonsama",
-    symbol: "MSAMA",
-    totalSupply: 1000n,
-  });
-}
-
-let contractEntity: Contract | undefined;
-
-export async function getContractEntity(store: Store): Promise<Contract> {
-  if (contractEntity == null) {
-    contractEntity = await store.get(Contract, contractAddress);
-    if (contractEntity == null) {
-      contractEntity = createContractEntity();
-      await store.insert(contractEntity);
-    }
-  }
-  return contractEntity;
-}
+export const contract = new ethers.Contract(
+  factoryAddress,
+  factory.abi,
+  new ethers.providers.WebSocketProvider(CHAIN_NODE)
+);

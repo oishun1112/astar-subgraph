@@ -1,31 +1,10 @@
-type Token @entity {
+type Market @entity {
+  " Singleton ID, equals to market address"
   id: ID!
-  owner: Owner
-  uri: String
-  transfers: [Transfer!]! @derivedFrom(field: "token")
-  contract: Contract
-}
 
-type Owner @entity {
-  id: ID!
-  ownedTokens: [Token!]! @derivedFrom(field: "owner")
-  balance: BigInt
-}
+  "Template address"
+  template: Bytes!
 
-type Contract @entity {
-  id: ID!
-  name: String
-  symbol: String
-  totalSupply: BigInt
-  mintedTokens: [Token!]! @derivedFrom(field: "contract")
-}
-
-type Transfer @entity {
-  id: ID!
-  token: Token!
-  from: Owner
-  to: Owner
-  timestamp: BigInt!
-  block: Int!
-  transactionHash: String!
+  "block timestamp at created time"
+  created: BigInt!
 }

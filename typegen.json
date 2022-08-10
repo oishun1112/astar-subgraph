@@ -1,6 +1,6 @@
 {
   "outDir": "src/types",
-  "specVersions": "https://moonriver.archive.subsquid.io/graphql",
+  "specVersions": "https://astar.archive.subsquid.io/graphql",
   "events": [],
   "calls": []
 }
