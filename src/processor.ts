@@ -51,6 +51,7 @@ processor.run(database, async (ctx) => {
             .map((event) => event.topic)
             .includes(topic)
         ) {
+          ctx.log.warn("Warn Log example, oishun");
           factoryEvent.push({ ...item.event, timestamp: block.header.timestamp });
         }
       }
